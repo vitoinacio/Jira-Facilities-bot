@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import type { FastifyInstance } from "fastify";
 import messagesRoutes from "./routes/messages.js";
 import authRoutes from "./routes/auth.js";
+import teamsOutgoingRoutes from "./routes/teamsOutgoing.js";
 
 export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
@@ -13,6 +14,7 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   app.register(messagesRoutes, { prefix: "/api" });
   app.register(authRoutes, { prefix: "/api/auth" });
+  app.register(teamsOutgoingRoutes, { prefix: "/api" });
 
   return app;
 }
