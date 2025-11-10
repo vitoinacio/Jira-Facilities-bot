@@ -21,7 +21,7 @@ function verifyHmac(rawBody: string | undefined, headerAuth?: string) {
       .update(rawBody, "utf8")
       .digest("base64");
 
-    if (sig.length !== computed.length) return false;
+    if (sig.length !== computed.length) return false; // evita throw
     return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(computed));
   } catch {
     return false;
@@ -36,9 +36,12 @@ export default async function teamsOutgoingRoutes(app: FastifyInstance) {
   app.post("/teams/outgoing", async (req, reply) => {
     const authHeader = (req.headers["authorization"] as string) || "";
     const rawBody = (req as any).rawBody as string | undefined;
+
+    const allowNoHmac = (process.env.TEAMS_DEBUG_ALLOW_NO_HMAC || "") === "1";
     const ok = verifyHmac(rawBody, authHeader);
-    if (!ok) {
-      console.warn("HMAC inválido do Teams Outgoing Webhook");
+
+    if (!ok && !allowNoHmac) {
+      console.warn("Outgoing Webhook: HMAC inválido");
       return reply.code(401).send({ text: "Assinatura inválida (HMAC)." });
     }
 
@@ -58,25 +61,29 @@ export default async function teamsOutgoingRoutes(app: FastifyInstance) {
 
     let accessToken: string | undefined;
     let cloudId: string | undefined;
-    const row = await getTokenByTeamsUser(teamsUserId);
-    if (row) {
-      const refresh = decrypt(row.refresh_token_enc, row.iv, row.tag);
-      const refreshed = await refreshTokens(refresh);
-      if (refreshed.refresh_token) {
-        await upsertToken({
-          teamsUserId,
-          atlassianAccountId: row.atlassian_account_id,
-          cloudId: row.cloud_id,
-          refreshToken: refreshed.refresh_token,
-        });
+    try {
+      const row = await getTokenByTeamsUser(teamsUserId);
+      if (row) {
+        const refresh = decrypt(row.refresh_token_enc, row.iv, row.tag);
+        const refreshed = await refreshTokens(refresh);
+        if (refreshed.refresh_token) {
+          await upsertToken({
+            teamsUserId,
+            atlassianAccountId: row.atlassian_account_id,
+            cloudId: row.cloud_id,
+            refreshToken: refreshed.refresh_token,
+          });
+        }
+        const resources = await getAccessibleResources(refreshed.access_token);
+        const jira =
+          resources.find(
+            (r) => r.id && (r.url || "").includes(".atlassian.net")
+          ) || resources[0];
+        accessToken = refreshed.access_token;
+        cloudId = jira.id;
       }
-      const resources = await getAccessibleResources(refreshed.access_token);
-      const jira =
-        resources.find(
-          (r) => r.id && (r.url || "").includes(".atlassian.net")
-        ) || resources[0];
-      accessToken = refreshed.access_token;
-      cloudId = jira.id;
+    } catch (e: any) {
+      console.error("Erro resolvendo token do usuário:", e?.message || e);
     }
 
     if (!accessToken || !cloudId) {
