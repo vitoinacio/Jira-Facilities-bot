@@ -9,18 +9,23 @@ import {
   jiraDoTransition,
 } from "../services/jira.js";
 
-function verifyHmac(reqBody: any, headerAuth?: string) {
-  if (!headerAuth?.startsWith("HMAC ")) return false;
-  const sig = headerAuth.slice(5).trim();
-  const secret = process.env.TEAMS_OUTGOING_SECRET || "";
-  if (!secret) return false;
-  const bodyStr =
-    typeof reqBody === "string" ? reqBody : JSON.stringify(reqBody);
-  const computed = crypto
-    .createHmac("sha256", secret)
-    .update(bodyStr, "utf8")
-    .digest("base64");
-  return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(computed));
+function verifyHmac(rawBody: string | undefined, headerAuth?: string) {
+  try {
+    if (!headerAuth?.startsWith("HMAC ")) return false;
+    const sig = headerAuth.slice(5).trim(); // base64
+    const secret = process.env.TEAMS_OUTGOING_SECRET || "";
+    if (!secret || !rawBody) return false;
+
+    const computed = crypto
+      .createHmac("sha256", secret)
+      .update(rawBody, "utf8")
+      .digest("base64");
+
+    if (sig.length !== computed.length) return false;
+    return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(computed));
+  } catch {
+    return false;
+  }
 }
 
 function toStarted(dateStr: string, timeStr: string) {
@@ -30,8 +35,10 @@ function toStarted(dateStr: string, timeStr: string) {
 export default async function teamsOutgoingRoutes(app: FastifyInstance) {
   app.post("/teams/outgoing", async (req, reply) => {
     const authHeader = (req.headers["authorization"] as string) || "";
-    const ok = verifyHmac(req.body, authHeader);
+    const rawBody = (req as any).rawBody as string | undefined;
+    const ok = verifyHmac(rawBody, authHeader);
     if (!ok) {
+      console.warn("HMAC inválido do Teams Outgoing Webhook");
       return reply.code(401).send({ text: "Assinatura inválida (HMAC)." });
     }
 
@@ -51,7 +58,6 @@ export default async function teamsOutgoingRoutes(app: FastifyInstance) {
 
     let accessToken: string | undefined;
     let cloudId: string | undefined;
-
     const row = await getTokenByTeamsUser(teamsUserId);
     if (row) {
       const refresh = decrypt(row.refresh_token_enc, row.iv, row.tag);
